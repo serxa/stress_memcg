@@ -123,7 +123,7 @@ else
         ' $1
     }
 
-    echo "Use 'run_test' and 'stop_test' to run and stop the test."
+    echo "Use 'run-test' and 'stop-test' to run and stop the test."
     echo
     echo "You can check process responsiveness with 'checker PID'. It reads '/proc/PID/cmdline' every second."
     echo "And mmap_lock is required to do that, so this way you will be able to check how long threads wait"
