@@ -1,5 +1,6 @@
 #include <iostream>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <vector>
@@ -8,11 +9,12 @@
 #include <chrono>
 #include <list>
 #include <random>
-#include <format>
+#include <iomanip>
 #include <mutex>
 #include <ctime>
 #include <system_error>
-#include <barrier>
+#include <functional>
+#include <condition_variable>
 #include <atomic>
 #include <cstring>
 
@@ -66,11 +68,14 @@ thread_local size_t thread_num = 0;
 thread_local std::string thread_name;
 thread_local uint64_t current_tid = 0;
 #define LOG(...) do { \
-        std::scoped_lock g{log_mutex}; \
+        std::lock_guard<std::mutex> g{log_mutex}; \
         std::time_t now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()); \
-        std::cout << std::put_time(std::localtime(&now), "%Y-%m-%d %H:%M:%S") \
-            << std::format(" [ {} ] <{}#{}> ", current_tid, thread_name, thread_num) \
-            << std::format(__VA_ARGS__) << std::endl; \
+        std::tm * local_time = std::localtime(&now); \
+        char time_buffer[100]; \
+        std::strftime(time_buffer, sizeof(time_buffer), "%Y-%m-%d %H:%M:%S", local_time); \
+        std::cout << time_buffer \
+            << " [ " << current_tid << " ] <" << thread_name << "#" << thread_num << "> " \
+            << __VA_ARGS__ << std::endl; \
     } while (false) \
     /**/
 
@@ -82,6 +87,31 @@ inline size_t getNs() {
     return size_t(ts.tv_sec * 1000000000LL + ts.tv_nsec);
 }
 
+// Barrier implementation to avoid C++20 dependency
+class Barrier {
+public:
+    Barrier(unsigned int count, std::function<void()> callback)
+        : thread_count(count), count(count), callback(callback) {}
+
+    void arrive_and_wait() {
+        std::unique_lock<std::mutex> lock(mutex);
+        if (--count == 0) {
+            callback();
+            count = thread_count; // Reset for the next iteration
+            cv.notify_all();
+        } else {
+            cv.wait(lock, [this] { return count == thread_count; });
+        }
+    }
+
+private:
+    const unsigned int thread_count;
+    std::mutex mutex;
+    unsigned int count;
+    std::function<void()> callback;
+    std::condition_variable cv;
+};
+
 // Helper procedures that make sure that all threads execute the same iteration.
 // There is a barrier synchronization point between iterations.
 // Note that when a thread is done working on its iteration (thread is full),
@@ -89,11 +119,11 @@ inline size_t getNs() {
 // but it does not allocate more memory. This is done to:
 //  - always have the same level of CPU pressure;
 //  - create sawtooth pattern for total memory consumtion.
-std::atomic<size_t> total_sum = 0;
+std::atomic<size_t> total_sum{0};
 bool currentThreadIsFull() {
     thread_local bool thread_is_full = false;
     static std::atomic<size_t> threads_full{0};
-    static std::barrier sync(threads, [] {
+    static Barrier sync(threads, [] {
         threads_full = 0;
         LOG("Iteration barrier");
     });
@@ -113,7 +143,7 @@ bool currentThreadIsFull() {
 // This is a real barrier synchronization point between iterations.
 // All thread should call it more or less simultaneously, so wait should be small.
 void currentThreadIsEmpty() {
-    static std::barrier sync(threads, [] {
+    static Barrier sync(threads, [] {
         LOG("Releasing memory");
         malloc_trim(memory_bytes / 2);
         LOG("Releasing memory done");
@@ -156,7 +186,7 @@ void randomMemoryWorker(size_t memory_per_thread, size_t thread_num) {
 
         data.sort();
 
-        LOG("Iteration #{}", iteration);
+        LOG("Iteration #" << iteration);
         size_t started_ns = getNs();
         constexpr size_t max_steps = 128;
         size_t steps = 0;
@@ -225,7 +255,7 @@ void sequentialMappedFileWorker(size_t memory_per_thread, size_t thread_num) {
     std::mt19937 gen(rd());
 
     // Prepare a file
-    std::string filename(std::format("{}/tmpfile.{}", writable_path, thread_num));
+    std::string filename(writable_path + "/tmpfile." + std::to_string(thread_num));
     {
         size_t pg_size = 4096;
         std::ofstream out(filename);
@@ -246,7 +276,7 @@ void sequentialMappedFileWorker(size_t memory_per_thread, size_t thread_num) {
         MappedFile mapped(filename);
         size_t * content = static_cast<size_t*>(mapped.data);
 
-        LOG("Iteration #{}", iteration);
+        LOG("Iteration #" << iteration);
         size_t started_ns = getNs();
         size_t elements = mapped.size / sizeof(size_t);
         constexpr size_t max_steps = 4096 / sizeof(size_t);
@@ -295,14 +325,14 @@ std::string readFile(const std::string & filename) {
 // #4 do_syscall_64
 // #5 entry_SYSCALL_64_after_hwframe
 int checkerMain(int check_pid) {
-    LOG("PID: {}", getpid());
+    LOG("PID: " << getpid());
     initWorker(0, "checker");
-    LOG("Checking PID: {}", check_pid);
-    std::string filename(std::format("/proc/{}/cmdline", check_pid));
+    LOG("Checking PID: " << check_pid);
+    std::string filename("/proc/" + std::to_string(check_pid) + "/cmdline");
     while (true) {
         size_t start = getNs();
         std::string contents = readFile(filename);
-        LOG("Duration: {} us", (getNs() - start) / 1000);
+        LOG("Duration: " << (getNs() - start) / 1000 << " us");
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     }
     return 0;
@@ -314,10 +344,10 @@ int checkerMain(int check_pid) {
 // This is why we have a special profiler here to explore what thread does
 // in kernel code while holding `mmap_lock`
 int realtimeProfilerMain(int freq, const std::string & outfile, int profile_pid) {
-    LOG("Profiler PID: {}", getpid());
+    LOG("Profiler PID: " << getpid());
     initWorker(0, "profiler");
-    LOG("Target PID: {} with frequency {} and output file: {}", profile_pid, freq, outfile);
-    std::string stack_filename(std::format("/proc/{}/stack", profile_pid));
+    LOG("Target PID: " << profile_pid << " with frequency " << freq << " and output file: " << outfile);
+    std::string stack_filename("/proc/" + std::to_string(profile_pid) + "/stack");
     size_t start = getNs();
     size_t interval = 1000000000 / freq;
     size_t skipped_samples = 0;
@@ -344,7 +374,7 @@ int realtimeProfilerMain(int freq, const std::string & outfile, int profile_pid)
                 now = getNs();
             }
             skipped_samples += skipped;
-            LOG("Skipped {} samples. In total it is {:.1f}% of samples", skipped, double(skipped_samples) * 100 / sample);
+            LOG("Skipped " << skipped << " samples. In total it is " << std::fixed << std::setprecision(1) << double(skipped_samples) * 100 / sample << "% of samples");
             sample += skipped;
         }
         std::this_thread::sleep_for(std::chrono::nanoseconds(profile_at - now));
@@ -352,7 +382,7 @@ int realtimeProfilerMain(int freq, const std::string & outfile, int profile_pid)
         std::string contents = readFile(stack_filename);
         if (contents.empty()) {
             empty_samples++;
-            LOG("Empty sample. In total it is {:.1f}% of samples", double(empty_samples) * 100 / sample);
+            LOG("Empty sample. In total it is " << std::fixed << std::setprecision(1) << double(empty_samples) * 100 / sample << "% of samples");
             if (empty_samples > 10 && empty_samples == sample) {
                 std::cerr << "All samples are empty. Probably you have no permissions. Try sudo." << std::endl;
                 exit(1);
@@ -407,11 +437,11 @@ int stackCollapseMain() {
     // Do not finalize the last block just in case it is corrupted
 
     // Output the aggregated results
-    for (const auto & [stack, count] : stackMap) {
+    for (const auto & stackAndCount : stackMap) {
         std::cout << "@[\n";
-        for (const auto & frame : stack)
+        for (const auto & frame : stackAndCount.first)
             std::cout << "    " << frame << '\n';
-        std::cout << "]: " << count << "\n";
+        std::cout << "]: " << stackAndCount.second << "\n";
     }
 
     return 0;
@@ -452,7 +482,7 @@ int main(int argc, char** argv) {
 
         threads = memory_threads + file_threads;
 
-        LOG("Stress PID: {}", getpid());
+        LOG("Stress PID: " << getpid());
 
         std::vector<std::thread> workers;
         for (int i = 0; i < file_threads; ++i)
