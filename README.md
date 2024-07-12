@@ -31,4 +31,4 @@ cd stress_memcg
 source env.sh.inc
 ```
 
-Then use `run_test` and `stop_test` to run and stop the stress test.
+Then use `run-test` and `stop-test` to run and stop the stress test.
