@@ -21,9 +21,19 @@ cd stress_memcg
 ./build.sh
 ```
 
-[Install docker](https://docs.docker.com/engine/install/ubuntu/#set-up-the-repository) to run binary inside cgroup
+## Prebuilt binaries
+You can find binaries for x86-64 and aarch64 in [Releases](https://github.com/serxa/stress_memcg/releases)
+```
+cd stress_memcg
+mkdir -p build
+wget https://github.com/serxa/stress_memcg/releases/download/v1.0.0/stress_memcg_x86-64 -O build/stress_memcg
+... or ...
+wget https://github.com/serxa/stress_memcg/releases/download/v1.0.0/stress_memcg_aarch64 -O build/stress_memcg
+chmod +x build/stress_memcg
+```
 
 ## Running
+[Install docker](https://docs.docker.com/engine/install/ubuntu/#set-up-the-repository) to run binary inside cgroup
 
 Setup you shell session with:
 ```bash
