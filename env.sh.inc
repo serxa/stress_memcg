@@ -18,6 +18,16 @@ else
         docker ps | grep stress_memcg | awk '{print $1}' | xargs docker kill
     }
 
+    run-ctr-test() {
+        mkdir -p $WORKDIR/files
+        ctr image pull docker.io/library/alpine:latest
+        ctr run --rm --mount type=bind,src=$WORKDIR,dst=/stress_memcg,options=rbind:rw --memory-limit 4294967296 --cpus 4 docker.io/library/alpine:latest stressmemcg /stress_memcg/stress_memcg 1000 1000 3000000000 4000000000 /stress_memcg/files 30000
+    }
+
+    stop-ctr-test() {
+        ctr tasks kill -s 9 stressmemcg
+    }
+
     checker() {
         PODPID=$1
         $STRESS checker $PODPID
