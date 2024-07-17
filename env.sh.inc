@@ -182,7 +182,20 @@ else
                     printf("        __cond_resched() calls in holding thread: %d\n", @cond_resched_count);
                     printf("         shrink_lruvec() calls in holding thread: %d\n", @shrink_lruvec_count);
                     printf("           shrink_list() calls in holding thread: %d\n", @shrink_list_count);
-                    printf("     number of pages reclaimed by holding thread: %d\n", @nr_reclaimed);
+                    printf("                      nr_taken by holding thread: %d\n", @nr_taken);
+                    printf("                     nr_active by holding thread: %d\n", @nr_active);
+                    printf("                nr_deactivated by holding thread: %d\n", @nr_deactivated);
+                    printf("                 nr_referenced by holding thread: %d\n", @nr_referenced);
+                    printf("                    nr_scanned by holding thread: %d\n", @nr_scanned);
+                    printf("                  nr_reclaimed by holding thread: %d\n", @nr_reclaimed);
+                    printf("                      nr_dirty by holding thread: %d\n", @nr_dirty);
+                    printf("                  nr_writeback by holding thread: %d\n", @nr_writeback);
+                    printf("                  nr_congested by holding thread: %d\n", @nr_congested);
+                    printf("                  nr_immediate by holding thread: %d\n", @nr_immediate);
+                    printf("                  nr_activate0 by holding thread: %d\n", @nr_activate0);
+                    printf("                  nr_activate1 by holding thread: %d\n", @nr_activate1);
+                    printf("                   nr_ref_keep by holding thread: %d\n", @nr_ref_keep);
+                    printf("                 nr_unmap_fail by holding thread: %d\n", @nr_unmap_fail);
                     printf("         number of failed trylock in the process: %d\n", @lockfailed_count);
                     printf("                                  holder runtime: %d us\n", @runtime / 1000);
                 }
@@ -199,7 +212,20 @@ else
                 @cond_resched_stats = hist(@cond_resched_count);
                 @shrink_lruvec_stats = hist(@shrink_lruvec_count);
                 @shrink_list_stats = hist(@shrink_list_count);
+                @nr_taken_stats = hist(@nr_taken);
+                @nr_active_stats = hist(@nr_active);
+                @nr_deactivated_stats = hist(@nr_deactivated);
+                @nr_referenced_stats = hist(@nr_referenced);
+                @nr_scanned_stats = hist(@nr_scanned);
+                @nr_dirty_stats = hist(@nr_dirty);
                 @nr_reclaimed_stats = hist(@nr_reclaimed);
+                @nr_writeback_stats = hist(@nr_writeback);
+                @nr_congested_stats = hist(@nr_congested);
+                @nr_immediate_stats = hist(@nr_immediate);
+                @nr_activate0_stats = hist(@nr_activate0);
+                @nr_activate1_stats = hist(@nr_activate1);
+                @nr_ref_keep_stats = hist(@nr_ref_keep);
+                @nr_unmap_fail_stats = hist(@nr_unmap_fail);
                 @lockfailed_stats = hist(@lockfailed_count);
                 @runtime_us_stats = hist(@runtime / 1000);
 
@@ -213,7 +239,20 @@ else
                 delete(@cond_resched_count);
                 delete(@shrink_lruvec_count);
                 delete(@shrink_list_count);
-                delete(@nr_reclaimed);
+                delete(@nr_taken_stats);
+                delete(@nr_active_stats);
+                delete(@nr_deactivated_stats);
+                delete(@nr_referenced_stats);
+                delete(@nr_scanned_stats);
+                delete(@nr_dirty_stats);
+                delete(@nr_reclaimed_stats);
+                delete(@nr_writeback_stats);
+                delete(@nr_congested_stats);
+                delete(@nr_immediate_stats);
+                delete(@nr_activate0_stats);
+                delete(@nr_activate1_stats);
+                delete(@nr_ref_keep_stats);
+                delete(@nr_unmap_fail_stats);
                 delete(@lockfailed_count);
                 delete(@runtime);
                 delete(@runtime_begin);
@@ -245,13 +284,47 @@ else
                 }
                 //printf(">> PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
             }
-            kretprobe:shrink_inactive_list /pid == $1/ {
+            tracepoint:vmscan:mm_vmscan_lru_shrink_active /pid == $1/ {
                 if (tid == @holder) {
                     @shrink_list_count++;
-                    @nr_reclaimed += retval;
+                    @nr_taken += args.nr_taken;
+                    @nr_active += args.nr_active;
+                    @nr_deactivated += args.nr_deactivated;
+                    @nr_referenced += args.nr_referenced;
                 } else {
                     @shrink_list_count_not_by_write_holder++;
-                    @nr_reclaimed_not_by_write_holder += retval;
+                    @nr_taken_not_by_write_holder += args.nr_taken;
+                    @nr_active_not_by_write_holder += args.nr_active;
+                    @nr_deactivated_not_by_write_holder += args.nr_deactivated;
+                    @nr_referenced_not_by_write_holder += args.nr_referenced;
+                }
+                //printf(">>-%d PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", retval, pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
+            }
+            tracepoint:vmscan:mm_vmscan_lru_shrink_inactive /pid == $1/ {
+                if (tid == @holder) {
+                    @shrink_list_count++;
+                    @nr_scanned += args.nr_scanned;
+                    @nr_reclaimed += args.nr_reclaimed;
+                    @nr_dirty += args.nr_dirty;
+                    @nr_writeback += args.nr_writeback;
+                    @nr_congested += args.nr_congested;
+                    @nr_immediate += args.nr_immediate;
+                    @nr_activate0 += args.nr_activate0;
+                    @nr_activate1 += args.nr_activate1;
+                    @nr_ref_keep += args.nr_ref_keep;
+                    @nr_unmap_fail += args.nr_unmap_fail;
+                } else {
+                    @shrink_list_count_not_by_write_holder++;
+                    @nr_scanned_not_by_write_holder += args.nr_scanned;
+                    @nr_reclaimed_not_by_write_holder += args.nr_reclaimed;
+                    @nr_dirty_not_by_write_holder += args.nr_dirty;
+                    @nr_writeback_not_by_write_holder += args.nr_writeback;
+                    @nr_congested_not_by_write_holder += args.nr_congested;
+                    @nr_immediate_not_by_write_holder += args.nr_immediate;
+                    @nr_activate0_not_by_write_holder += args.nr_activate0;
+                    @nr_activate1_not_by_write_holder += args.nr_activate1;
+                    @nr_ref_keep_not_by_write_holder += args.nr_ref_keep;
+                    @nr_unmap_fail_not_by_write_holder += args.nr_unmap_fail;
                 }
                 //printf(">>-%d PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", retval, pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
             }
