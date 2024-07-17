@@ -56,8 +56,8 @@ Here is the typical stackframe that you can see during yields:
 
 // Globals
 size_t threads = 0;              // Total number of threads
-size_t memory_bytes = 0;         // Max amount of memory to be allocated by all file-workers in total (i.e. anonymous memory size)
-size_t file_bytes = 0;           // Max amount of mapped memory to be iterated over by all memory-workers in total (i.e. page cache size)
+size_t memory_bytes = 0;         // Max amount of memory to be allocated by all memory-workers in total (i.e. anonymous memory size)
+size_t file_bytes = 0;           // Max amount of mapped memory to be iterated over by all file-workers in total (i.e. page cache size)
 std::string writable_path;       // Path to the folder where memory mapped files reside
 size_t delay_memory_ms = 0;      // Delay for memory-workers to start after all file-workers start (to create files and build up page cache to reclaim from)
 size_t iteration_time_ns = 10e9; // Duration of active phase of iteration for both file-workers and memory-workers (10 seconds)

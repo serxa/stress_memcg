@@ -32,7 +32,7 @@ wget https://github.com/serxa/stress_memcg/releases/download/v1.0.0/stress_memcg
 chmod +x build/stress_memcg
 ```
 
-## Running
+## Running with Docker
 [Install docker](https://docs.docker.com/engine/install/ubuntu/#set-up-the-repository) to run binary inside cgroup
 
 Setup you shell session with:
@@ -42,6 +42,16 @@ source env.sh.inc
 ```
 
 Then use `run-test` and `stop-test` to run and stop the stress test.
+
+## Running with containerd
+
+Setup you shell session with:
+```bash
+cd stress_memcg
+source env.sh.inc
+```
+
+Then use `run-ctr-test` and `stop-ctr-test` to run and stop the stress test.
 
 ## Running on GKE node
 First, you'll need to obtain the node shell.
