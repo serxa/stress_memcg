@@ -158,185 +158,274 @@ else
 
             BEGIN {
                 printf("Tracing detailed mmap_lock hold stats in PID %d... Hit Ctrl-C to end.\n", $1);
+                printf("Gathering:%s%s%s\n", $2 == 1 ? "" : " READ", $3 == 1 ? "" : " WRITE", $4 == 1 ? "" : " NOLOCK");
+                @type[0] = "READ";  // read_lock
+                @type[1] = "WRITE"; // write_lock
             }
-            tracepoint:mmap_lock:mmap_lock_acquire_returned /pid == $1/ {
-                if (args.write && args.success) {
-                    @start = nsecs;
-                    @holder = tid;
-                    @runtime_begin = @start;
-                }
-                if (!args.success && @start > 0) {
-                    @lockfailed_count++; // By any tid, while lock is held for write
-                }
-            }
-            tracepoint:mmap_lock:mmap_lock_released /pid == $1 && tid == @holder/ {
+            tracepoint:mmap_lock:mmap_lock_acquire_returned /pid == $1 && args.success/ {
                 $now = nsecs;
-                $us = ($now - @start)/1000;
-                @runtime += ($now - @runtime_begin);
-                if ($us > 100000) {
-                    // Single long hold stats
-                    printf("mmap_lock hold for write duration in PID %d TID %d COMM %s: %d us\n", pid, tid, comm, $us);
-                    printf("    number of context switches in holding thread: %d\n", @ctxswitch_count);
-                    printf("         number of preemptions in holding thread: %d\n", @preempted_count);
-                    printf("      reclaim_throttle() calls in holding thread: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n", @reclaim_throttle_count[0], @reclaim_throttle_count[1], @reclaim_throttle_count[2], @reclaim_throttle_count[3]);
-                    printf("        __cond_resched() calls in holding thread: %d\n", @cond_resched_count);
-                    printf("         shrink_lruvec() calls in holding thread: %d\n", @shrink_lruvec_count);
-                    printf("           shrink_list() calls in holding thread: %d\n", @shrink_list_count);
-                    printf("                      nr_taken by holding thread: %d\n", @nr_taken);
-                    printf("                     nr_active by holding thread: %d\n", @nr_active);
-                    printf("                nr_deactivated by holding thread: %d\n", @nr_deactivated);
-                    printf("                 nr_referenced by holding thread: %d\n", @nr_referenced);
-                    printf("                    nr_scanned by holding thread: %d\n", @nr_scanned);
-                    printf("                  nr_reclaimed by holding thread: %d\n", @nr_reclaimed);
-                    printf("                      nr_dirty by holding thread: %d\n", @nr_dirty);
-                    printf("                  nr_writeback by holding thread: %d\n", @nr_writeback);
-                    printf("                  nr_congested by holding thread: %d\n", @nr_congested);
-                    printf("                  nr_immediate by holding thread: %d\n", @nr_immediate);
-                    printf("                  nr_activate0 by holding thread: %d\n", @nr_activate0);
-                    printf("                  nr_activate1 by holding thread: %d\n", @nr_activate1);
-                    printf("                   nr_ref_keep by holding thread: %d\n", @nr_ref_keep);
-                    printf("                 nr_unmap_fail by holding thread: %d\n", @nr_unmap_fail);
-                    printf("         number of failed trylock in the process: %d\n", @lockfailed_count);
-                    printf("                                  holder runtime: %d us\n", @runtime / 1000);
-                }
+                @hold_start[tid] = $now; // timestamp of mmap_lock acquire
+                @exec_start[tid] = $now; // timestamp of start executing on CPU under lock
 
-                // Aggregated hold stats
-                @hold_us = hist($us);
-                @hold_avg_us = avg($us);
-                @ctxswitch_stats = hist(@ctxswitch_count);
-                @preempted_stats = hist(@preempted_count);
-                @reclaim_throttle_stats[0] = hist(@reclaim_throttle_count[0]);
-                @reclaim_throttle_stats[1] = hist(@reclaim_throttle_count[1]);
-                @reclaim_throttle_stats[2] = hist(@reclaim_throttle_count[2]);
-                @reclaim_throttle_stats[3] = hist(@reclaim_throttle_count[3]);
-                @cond_resched_stats = hist(@cond_resched_count);
-                @shrink_lruvec_stats = hist(@shrink_lruvec_count);
-                @shrink_list_stats = hist(@shrink_list_count);
-                @nr_taken_stats = hist(@nr_taken);
-                @nr_active_stats = hist(@nr_active);
-                @nr_deactivated_stats = hist(@nr_deactivated);
-                @nr_referenced_stats = hist(@nr_referenced);
-                @nr_scanned_stats = hist(@nr_scanned);
-                @nr_dirty_stats = hist(@nr_dirty);
-                @nr_reclaimed_stats = hist(@nr_reclaimed);
-                @nr_writeback_stats = hist(@nr_writeback);
-                @nr_congested_stats = hist(@nr_congested);
-                @nr_immediate_stats = hist(@nr_immediate);
-                @nr_activate0_stats = hist(@nr_activate0);
-                @nr_activate1_stats = hist(@nr_activate1);
-                @nr_ref_keep_stats = hist(@nr_ref_keep);
-                @nr_unmap_fail_stats = hist(@nr_unmap_fail);
-                @lockfailed_stats = hist(@lockfailed_count);
-                @runtime_us_stats = hist(@runtime / 1000);
+                if ($4 == 0) {
+                    if (@release_start[tid] > 0) {
+                        $us = ($now - @release_start[tid]) / 1000; // duration after mmap_lock released
+                            if ($us > 10000000) {
+                            printf("--- [NOLOCK] stats in TID %d COMM %s ---\n", tid, comm);
+                            printf("    number of context switches: %d\n", @ctxswitch_count[tid]);
+                            printf("         number of preemptions: %d\n", @preempted_count[tid]);
+                            printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
+                                @reclaim_throttle_count[tid, 0],
+                                @reclaim_throttle_count[tid, 1],
+                                @reclaim_throttle_count[tid, 2],
+                                @reclaim_throttle_count[tid, 3]);
+                            printf("        __cond_resched() calls: %d\n", @cond_resched_count[tid]);
+                            printf("         shrink_lruvec() calls: %d\n", @shrink_lruvec_count[tid]);
+                            printf("           shrink_list() calls: %d\n", @shrink_list_count[tid]);
+                            printf("                      nr_taken: %d\n", @nr_taken[tid]);
+                            printf("                     nr_active: %d\n", @nr_active[tid]);
+                            printf("                nr_deactivated: %d\n", @nr_deactivated[tid]);
+                            printf("                 nr_referenced: %d\n", @nr_referenced[tid]);
+                            printf("                    nr_scanned: %d\n", @nr_scanned[tid]);
+                            printf("                  nr_reclaimed: %d\n", @nr_reclaimed[tid]);
+                            printf("                      nr_dirty: %d\n", @nr_dirty[tid]);
+                            printf("                  nr_writeback: %d\n", @nr_writeback[tid]);
+                            printf("                  nr_congested: %d\n", @nr_congested[tid]);
+                            printf("                  nr_immediate: %d\n", @nr_immediate[tid]);
+                            printf("                  nr_activate0: %d\n", @nr_activate0[tid]);
+                            printf("                  nr_activate1: %d\n", @nr_activate1[tid]);
+                            printf("                   nr_ref_keep: %d\n", @nr_ref_keep[tid]);
+                            printf("                 nr_unmap_fail: %d\n", @nr_unmap_fail[tid]);
+                            printf("                      duration: %d us\n", $us);
+                        }
+                        @hold_us[2] = hist($us);
+                        @hold_avg_us[2] = avg($us);
+                    }
+
+                    // Aggregated stats without lock
+                    @ctxswitch_stats[2] = hist(@ctxswitch_count[tid]);
+                    @preempted_stats[2] = hist(@preempted_count[tid]);
+                    @reclaim_throttle_stats[2, 0] = hist(@reclaim_throttle_count[tid, 0]);
+                    @reclaim_throttle_stats[2, 1] = hist(@reclaim_throttle_count[tid, 1]);
+                    @reclaim_throttle_stats[2, 2] = hist(@reclaim_throttle_count[tid, 2]);
+                    @reclaim_throttle_stats[2, 3] = hist(@reclaim_throttle_count[tid, 3]);
+                    @cond_resched_stats[2] = hist(@cond_resched_count[tid]);
+                    @shrink_lruvec_stats[2] = hist(@shrink_lruvec_count[tid]);
+                    @shrink_list_stats[2] = hist(@shrink_list_count[tid]);
+                    @nr_taken_stats[2] = hist(@nr_taken[tid]);
+                    @nr_active_stats[2] = hist(@nr_active[tid]);
+                    @nr_deactivated_stats[2] = hist(@nr_deactivated[tid]);
+                    @nr_referenced_stats[2] = hist(@nr_referenced[tid]);
+                    @nr_scanned_stats[2] = hist(@nr_scanned[tid]);
+                    @nr_dirty_stats[2] = hist(@nr_dirty[tid]);
+                    @nr_reclaimed_stats[2] = hist(@nr_reclaimed[tid]);
+                    @nr_writeback_stats[2] = hist(@nr_writeback[tid]);
+                    @nr_congested_stats[2] = hist(@nr_congested[tid]);
+                    @nr_immediate_stats[2] = hist(@nr_immediate[tid]);
+                    @nr_activate0_stats[2] = hist(@nr_activate0[tid]);
+                    @nr_activate1_stats[2] = hist(@nr_activate1[tid]);
+                    @nr_ref_keep_stats[2] = hist(@nr_ref_keep[tid]);
+                    @nr_unmap_fail_stats[2] = hist(@nr_unmap_fail[tid]);
+                }
 
                 // Cleanup
-                delete(@ctxswitch_count);
-                delete(@preempted_count);
-                delete(@reclaim_throttle_count[0]);
-                delete(@reclaim_throttle_count[1]);
-                delete(@reclaim_throttle_count[2]);
-                delete(@reclaim_throttle_count[3]);
-                delete(@cond_resched_count);
-                delete(@shrink_lruvec_count);
-                delete(@shrink_list_count);
-                delete(@nr_taken_stats);
-                delete(@nr_active_stats);
-                delete(@nr_deactivated_stats);
-                delete(@nr_referenced_stats);
-                delete(@nr_scanned_stats);
-                delete(@nr_dirty_stats);
-                delete(@nr_reclaimed_stats);
-                delete(@nr_writeback_stats);
-                delete(@nr_congested_stats);
-                delete(@nr_immediate_stats);
-                delete(@nr_activate0_stats);
-                delete(@nr_activate1_stats);
-                delete(@nr_ref_keep_stats);
-                delete(@nr_unmap_fail_stats);
-                delete(@lockfailed_count);
-                delete(@runtime);
-                delete(@runtime_begin);
-                delete(@start);
-                delete(@holder);
+                delete(@ctxswitch_count[tid]);
+                delete(@preempted_count[tid]);
+                delete(@reclaim_throttle_count[tid, 0]);
+                delete(@reclaim_throttle_count[tid, 1]);
+                delete(@reclaim_throttle_count[tid, 2]);
+                delete(@reclaim_throttle_count[tid, 3]);
+                delete(@cond_resched_count[tid]);
+                delete(@shrink_lruvec_count[tid]);
+                delete(@shrink_list_count[tid]);
+                delete(@nr_taken[tid]);
+                delete(@nr_active[tid]);
+                delete(@nr_deactivated[tid]);
+                delete(@nr_referenced[tid]);
+                delete(@nr_scanned[tid]);
+                delete(@nr_dirty[tid]);
+                delete(@nr_reclaimed[tid]);
+                delete(@nr_writeback[tid]);
+                delete(@nr_congested[tid]);
+                delete(@nr_immediate[tid]);
+                delete(@nr_activate0[tid]);
+                delete(@nr_activate1[tid]);
+                delete(@nr_ref_keep[tid]);
+                delete(@nr_unmap_fail[tid]);
+                delete(@runtime[tid]);
             }
-            tracepoint:sched:sched_switch /@holder > 0/ {
-                if (args.prev_pid > 0 && (uint64)args.prev_pid == @holder) { // Holder goes off-CPU
-                    if (args.prev_state == TASK_RUNNING) {
-                        @preempted_count++;
+            tracepoint:mmap_lock:mmap_lock_released /pid == $1 && @hold_start[tid] > 0/ {
+                $now = nsecs;
+                $us = ($now - @hold_start[tid]) / 1000; // total hold duration
+                @runtime[tid] += ($now - @exec_start[tid]);
+                @release_start[tid] = $now;
+
+                if ((!args.write && $2 == 0) || (args.write && $3 == 0)) {
+                    if ($us > 100000) {
+                        // Single long hold stats
+                        printf("=== [%s] mmap_lock hold stats in TID %d COMM %s ===\n", @type[args.write], tid, comm);
+                        printf("    number of context switches: %d\n", @ctxswitch_count[tid]);
+                        printf("         number of preemptions: %d\n", @preempted_count[tid]);
+                        printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
+                            @reclaim_throttle_count[tid, 0],
+                            @reclaim_throttle_count[tid, 1],
+                            @reclaim_throttle_count[tid, 2],
+                            @reclaim_throttle_count[tid, 3]);
+                        printf("        __cond_resched() calls: %d\n", @cond_resched_count[tid]);
+                        printf("         shrink_lruvec() calls: %d\n", @shrink_lruvec_count[tid]);
+                        printf("           shrink_list() calls: %d\n", @shrink_list_count[tid]);
+                        printf("                      nr_taken: %d\n", @nr_taken[tid]);
+                        printf("                     nr_active: %d\n", @nr_active[tid]);
+                        printf("                nr_deactivated: %d\n", @nr_deactivated[tid]);
+                        printf("                 nr_referenced: %d\n", @nr_referenced[tid]);
+                        printf("                    nr_scanned: %d\n", @nr_scanned[tid]);
+                        printf("                  nr_reclaimed: %d\n", @nr_reclaimed[tid]);
+                        printf("                      nr_dirty: %d\n", @nr_dirty[tid]);
+                        printf("                  nr_writeback: %d\n", @nr_writeback[tid]);
+                        printf("                  nr_congested: %d\n", @nr_congested[tid]);
+                        printf("                  nr_immediate: %d\n", @nr_immediate[tid]);
+                        printf("                  nr_activate0: %d\n", @nr_activate0[tid]);
+                        printf("                  nr_activate1: %d\n", @nr_activate1[tid]);
+                        printf("                   nr_ref_keep: %d\n", @nr_ref_keep[tid]);
+                        printf("                 nr_unmap_fail: %d\n", @nr_unmap_fail[tid]);
+                        printf("                       runtime: %d us\n", @runtime[tid] / 1000);
+                        printf("                      duration: %d us\n", $us);
                     }
-                    @ctxswitch_count++;
-                    @runtime += (nsecs - @runtime_begin);
-                    //printf("-- PID %d TID %d COMM %s: elapsed %d us HOLDER %d PREV_STATE %d\n", pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder, args.prev_state);
-                } else if (args.next_pid > 0 && (uint64)args.next_pid == @holder) { // Holder goes on-CPU
-                    //printf("++ PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
-                    @runtime_begin = nsecs;
+
+                    // Aggregated hold stats
+                    @hold_us[args.write] = hist($us);
+                    @hold_avg_us[args.write] = avg($us);
+                    @ctxswitch_stats[args.write] = hist(@ctxswitch_count[tid]);
+                    @preempted_stats[args.write] = hist(@preempted_count[tid]);
+                    @reclaim_throttle_stats[args.write, 0] = hist(@reclaim_throttle_count[tid, 0]);
+                    @reclaim_throttle_stats[args.write, 1] = hist(@reclaim_throttle_count[tid, 1]);
+                    @reclaim_throttle_stats[args.write, 2] = hist(@reclaim_throttle_count[tid, 2]);
+                    @reclaim_throttle_stats[args.write, 3] = hist(@reclaim_throttle_count[tid, 3]);
+                    @cond_resched_stats[args.write] = hist(@cond_resched_count[tid]);
+                    @shrink_lruvec_stats[args.write] = hist(@shrink_lruvec_count[tid]);
+                    @shrink_list_stats[args.write] = hist(@shrink_list_count[tid]);
+                    @nr_taken_stats[args.write] = hist(@nr_taken[tid]);
+                    @nr_active_stats[args.write] = hist(@nr_active[tid]);
+                    @nr_deactivated_stats[args.write] = hist(@nr_deactivated[tid]);
+                    @nr_referenced_stats[args.write] = hist(@nr_referenced[tid]);
+                    @nr_scanned_stats[args.write] = hist(@nr_scanned[tid]);
+                    @nr_dirty_stats[args.write] = hist(@nr_dirty[tid]);
+                    @nr_reclaimed_stats[args.write] = hist(@nr_reclaimed[tid]);
+                    @nr_writeback_stats[args.write] = hist(@nr_writeback[tid]);
+                    @nr_congested_stats[args.write] = hist(@nr_congested[tid]);
+                    @nr_immediate_stats[args.write] = hist(@nr_immediate[tid]);
+                    @nr_activate0_stats[args.write] = hist(@nr_activate0[tid]);
+                    @nr_activate1_stats[args.write] = hist(@nr_activate1[tid]);
+                    @nr_ref_keep_stats[args.write] = hist(@nr_ref_keep[tid]);
+                    @nr_unmap_fail_stats[args.write] = hist(@nr_unmap_fail[tid]);
+                    @runtime_us_stats[args.write] = hist(@runtime[tid] / 1000);
+                }
+
+                // Cleanup
+                delete(@ctxswitch_count[tid]);
+                delete(@preempted_count[tid]);
+                delete(@reclaim_throttle_count[tid, 0]);
+                delete(@reclaim_throttle_count[tid, 1]);
+                delete(@reclaim_throttle_count[tid, 2]);
+                delete(@reclaim_throttle_count[tid, 3]);
+                delete(@cond_resched_count[tid]);
+                delete(@shrink_lruvec_count[tid]);
+                delete(@shrink_list_count[tid]);
+                delete(@nr_taken[tid]);
+                delete(@nr_active[tid]);
+                delete(@nr_deactivated[tid]);
+                delete(@nr_referenced[tid]);
+                delete(@nr_scanned[tid]);
+                delete(@nr_dirty[tid]);
+                delete(@nr_reclaimed[tid]);
+                delete(@nr_writeback[tid]);
+                delete(@nr_congested[tid]);
+                delete(@nr_immediate[tid]);
+                delete(@nr_activate0[tid]);
+                delete(@nr_activate1[tid]);
+                delete(@nr_ref_keep[tid]);
+                delete(@nr_unmap_fail[tid]);
+                delete(@runtime[tid]);
+                delete(@exec_start[tid]);
+                delete(@hold_start[tid]);
+            }
+            tracepoint:sched:sched_switch {
+                if (args.prev_pid > 0 && @hold_start[args.prev_pid] > 0) { // Holder goes off-CPU
+                    if (args.prev_state == TASK_RUNNING) {
+                        @preempted_count[args.prev_pid]++;
+                    }
+                    @ctxswitch_count[args.prev_pid]++;
+                    @runtime[args.prev_pid] += (nsecs - @exec_start[args.prev_pid]);
+                    //printf("-- PID %d TID %d COMM %s: elapsed %d us PREV_STATE %d\n", pid, tid, comm, (nsecs - @exec_start[args.prev_pid]) / 1000, args.prev_state);
+                } else if (args.next_pid > 0 && @hold_start[args.next_pid] > 0) { // Holder goes on-CPU
+                    //printf("++ PID %d TID %d COMM %s: elapsed %d us\n", pid, tid, comm, (nsecs - @exec_start[args.prev_pid]) / 1000);
+                    @exec_start[args.next_pid] = nsecs;
                 }
             }
-            kprobe:__cond_resched /pid == $1 && tid == @holder/ {
-                @cond_resched_count++;
-                //printf("?? PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
+            kprobe:__cond_resched /pid == $1 && @hold_start[tid] > 0/ {
+                @cond_resched_count[tid]++;
+                //printf("?? TID %d COMM %s\n", tid, comm);
             }
             kprobe:shrink_lruvec /pid == $1/ {
-                if (tid == @holder) {
-                    @shrink_lruvec_count++;
-                } else {
-                    @shrink_lruvec_count_not_by_write_holder++;
-                }
-                //printf(">> PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
+                @shrink_lruvec_count[tid]++;
+                //printf(">> TID %d COMM %s\n", tid, comm);
             }
             tracepoint:vmscan:mm_vmscan_lru_shrink_active /pid == $1/ {
-                if (tid == @holder) {
-                    @shrink_list_count++;
-                    @nr_taken += args.nr_taken;
-                    @nr_active += args.nr_active;
-                    @nr_deactivated += args.nr_deactivated;
-                    @nr_referenced += args.nr_referenced;
-                } else {
-                    @shrink_list_count_not_by_write_holder++;
-                    @nr_taken_not_by_write_holder += args.nr_taken;
-                    @nr_active_not_by_write_holder += args.nr_active;
-                    @nr_deactivated_not_by_write_holder += args.nr_deactivated;
-                    @nr_referenced_not_by_write_holder += args.nr_referenced;
-                }
-                //printf(">>-%d PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", retval, pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
+                @shrink_list_count[tid]++;
+                @nr_taken[tid] += args.nr_taken;
+                @nr_active[tid] += args.nr_active;
+                @nr_deactivated[tid] += args.nr_deactivated;
+                @nr_referenced[tid] += args.nr_referenced;
+                //printf(">>A TID %d COMM %s\n", tid, comm);
             }
             tracepoint:vmscan:mm_vmscan_lru_shrink_inactive /pid == $1/ {
-                if (tid == @holder) {
-                    @shrink_list_count++;
-                    @nr_scanned += args.nr_scanned;
-                    @nr_reclaimed += args.nr_reclaimed;
-                    @nr_dirty += args.nr_dirty;
-                    @nr_writeback += args.nr_writeback;
-                    @nr_congested += args.nr_congested;
-                    @nr_immediate += args.nr_immediate;
-                    @nr_activate0 += args.nr_activate0;
-                    @nr_activate1 += args.nr_activate1;
-                    @nr_ref_keep += args.nr_ref_keep;
-                    @nr_unmap_fail += args.nr_unmap_fail;
-                } else {
-                    @shrink_list_count_not_by_write_holder++;
-                    @nr_scanned_not_by_write_holder += args.nr_scanned;
-                    @nr_reclaimed_not_by_write_holder += args.nr_reclaimed;
-                    @nr_dirty_not_by_write_holder += args.nr_dirty;
-                    @nr_writeback_not_by_write_holder += args.nr_writeback;
-                    @nr_congested_not_by_write_holder += args.nr_congested;
-                    @nr_immediate_not_by_write_holder += args.nr_immediate;
-                    @nr_activate0_not_by_write_holder += args.nr_activate0;
-                    @nr_activate1_not_by_write_holder += args.nr_activate1;
-                    @nr_ref_keep_not_by_write_holder += args.nr_ref_keep;
-                    @nr_unmap_fail_not_by_write_holder += args.nr_unmap_fail;
-                }
-                //printf(">>-%d PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", retval, pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
+                @shrink_list_count[tid]++;
+                @nr_scanned[tid] += args.nr_scanned;
+                @nr_reclaimed[tid] += args.nr_reclaimed;
+                @nr_dirty[tid] += args.nr_dirty;
+                @nr_writeback[tid] += args.nr_writeback;
+                @nr_congested[tid] += args.nr_congested;
+                @nr_immediate[tid] += args.nr_immediate;
+                @nr_activate0[tid] += args.nr_activate0;
+                @nr_activate1[tid] += args.nr_activate1;
+                @nr_ref_keep[tid] += args.nr_ref_keep;
+                @nr_unmap_fail[tid] += args.nr_unmap_fail;
+                //printf(">>I TID %d COMM %s\n", tid, comm);
             }
             kprobe:reclaim_throttle /pid == $1/ {
-                $reason = arg1;
-                if (tid == @holder) {
-                    @reclaim_throttle_count[$reason]++;
-                } else {
-                    @reclaim_throttle_count_not_by_write_holder[$reason]++;
-                }
-                //printf(">>-%d PID %d TID %d COMM %s: elapsed %d us HOLDER %d\n", retval, pid, tid, comm, (nsecs - @runtime_begin) / 1000, @holder);
+                @reclaim_throttle_count[tid, arg1]++;
+                //printf(">>R TID %d COMM %s REASON %d\n", tid, comm, arg1);
             }
-        ' $1
+            END {
+                clear(@ctxswitch_count);
+                clear(@preempted_count);
+                clear(@reclaim_throttle_count);
+                clear(@reclaim_throttle_count);
+                clear(@reclaim_throttle_count);
+                clear(@reclaim_throttle_count);
+                clear(@cond_resched_count);
+                clear(@shrink_lruvec_count);
+                clear(@shrink_list_count);
+                clear(@nr_taken);
+                clear(@nr_active);
+                clear(@nr_deactivated);
+                clear(@nr_referenced);
+                clear(@nr_scanned);
+                clear(@nr_dirty);
+                clear(@nr_reclaimed);
+                clear(@nr_writeback);
+                clear(@nr_congested);
+                clear(@nr_immediate);
+                clear(@nr_activate0);
+                clear(@nr_activate1);
+                clear(@nr_ref_keep);
+                clear(@nr_unmap_fail);
+                clear(@runtime);
+                clear(@exec_start);
+                clear(@hold_start);
+                clear(@release_start);
+                clear(@type);
+            }
+        ' $1 $2 $3 $4
     }
 fi
