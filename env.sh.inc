@@ -73,7 +73,7 @@ else
             tracepoint:mmap_lock:mmap_lock_acquire_returned /pid == $1 && @start[tid] > 0/ {
                 $us = (nsecs - @start[tid])/1000;
                 if ($us > 100000) {
-                    printf("mmap_lock acquire duration in PID %d TID %d COMM %s: %d us\n", pid, tid, comm, $us);
+                    printf("%s mmap_lock acquire duration in PID %d TID %d COMM %s: %d us\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), pid, tid, comm, $us);
                 }
                 @acquire_us = hist($us);
             }
@@ -92,7 +92,7 @@ else
             tracepoint:mmap_lock:mmap_lock_released /pid == $1 && @start[tid] > 0/ {
                 $us = (nsecs - @start[tid])/1000;
                 if ($us > 100000) {
-                    printf("mmap_lock hold duration in PID %d TID %d COMM %s: %d us\n", pid, tid, comm, $us);
+                    printf("%s mmap_lock hold duration in PID %d TID %d COMM %s: %d us\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), pid, tid, comm, $us);
                 }
                 @hold_us = hist($us);
                 @hold_avg_us = avg($us);
@@ -112,7 +112,7 @@ else
             tracepoint:mmap_lock:mmap_lock_released /pid == $1 && @start[tid] > 0/ {
                 $us = (nsecs - @start[tid])/1000;
                 if ($us > 100000) {
-                    printf("mmap_lock hold duration in PID %d TID %d COMM %s: %d us\n", pid, tid, comm, $us);
+                    printf("%s mmap_lock hold duration in PID %d TID %d COMM %s: %d us\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), pid, tid, comm, $us);
                 }
                 @hold_us = hist($us);
                 @hold_avg_us = avg($us);
@@ -136,7 +136,7 @@ else
             tracepoint:mmap_lock:mmap_lock_released /pid == $1 && @start[tid] > 0/ {
                 $us = (nsecs - @start[tid])/1000;
                 if ($us > 100000) {
-                    printf("mmap_lock hold duration in PID %d TID %d COMM %s: %d us\n", pid, tid, comm, $us);
+                    printf("%s mmap_lock hold duration in PID %d TID %d COMM %s: %d us\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), pid, tid, comm, $us);
                 }
                 @hold_us = hist($us);
                 @hold_avg_us = avg($us);
@@ -145,7 +145,7 @@ else
             profile:hz:99 /pid == $1 && @start[tid] > 0/ {
                 $us = (nsecs - @start[tid])/1000;
                 if ($us > 1000000) {
-                    printf("mmap_lock is held more than 1 seconds by PID %d TID %d COMM %s: %d us\n", pid, tid, comm, $us);
+                    printf("%s mmap_lock is held more than 1 seconds by PID %d TID %d COMM %s: %d us\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), pid, tid, comm, $us);
                 }
             }
             END { clear(@start); }
@@ -171,7 +171,7 @@ else
                     if (@release_start[tid] > 0) {
                         $us = ($now - @release_start[tid]) / 1000; // duration after mmap_lock released
                             if ($us > 10000000) {
-                            printf("--- [NOLOCK] stats in TID %d COMM %s ---\n", tid, comm);
+                            printf("%s --- [NOLOCK] stats in TID %d COMM %s ---\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), tid, comm);
                             printf("    number of context switches: %d\n", @ctxswitch_count[tid]);
                             printf("         number of preemptions: %d\n", @preempted_count[tid]);
                             printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
@@ -263,7 +263,7 @@ else
                 if ((!args.write && $2 == 0) || (args.write && $3 == 0)) {
                     if ($us > 100000) {
                         // Single long hold stats
-                        printf("=== [%s] mmap_lock hold stats in TID %d COMM %s ===\n", @type[args.write], tid, comm);
+                        printf("%s === [%s] mmap_lock hold stats in TID %d COMM %s ===\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), @type[args.write], tid, comm);
                         printf("    number of context switches: %d\n", @ctxswitch_count[tid]);
                         printf("         number of preemptions: %d\n", @preempted_count[tid]);
                         printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
