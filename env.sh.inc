@@ -153,6 +153,10 @@ else
     }
 
     trace-per-hold-stats() {
+        local VERIFIER_HAS_BUG=$((`uname -r | cut -d . -f 1` * 1000 + `uname -r | cut -d . -f 2` < 6008))
+        local NO_RECLAIM_THROTTLE=`bpf -l 'kprobe:reclaim_throttle' | grep kprobe >/dev/null; echo $?`
+        if [ $NO_RECLAIM_THROTTLE -eq 1 ]; then echo "WARNING: kprobe:reclaim_throttle is not available -- skipping"; fi
+        if [ $VERIFIER_HAS_BUG -eq 1 ]; then echo "WARNING: bpf verifier has some bug in linux<6.8, we skip collecting few stats to avoid triggering it"; fi
         bpf -e '
             #define TASK_RUNNING 0
 
@@ -162,7 +166,7 @@ else
                 @type[0] = "READ";  // read_lock
                 @type[1] = "WRITE"; // write_lock
             }
-            tracepoint:mmap_lock:mmap_lock_acquire_returned /pid == $1 && args.success/ {
+            tracepoint:mmap_lock:mmap_lock_acquire_returned /pid == $1 && args->success/ {
                 $now = nsecs;
                 @hold_start[tid] = $now; // timestamp of mmap_lock acquire
                 @exec_start[tid] = $now; // timestamp of start executing on CPU under lock
@@ -174,11 +178,13 @@ else
                             printf("%s --- [NOLOCK] stats in TID %d COMM %s ---\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), tid, comm);
                             printf("    number of context switches: %d\n", @ctxswitch_count[tid]);
                             printf("         number of preemptions: %d\n", @preempted_count[tid]);
-                            printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
-                                @reclaim_throttle_count[tid, 0],
-                                @reclaim_throttle_count[tid, 1],
-                                @reclaim_throttle_count[tid, 2],
-                                @reclaim_throttle_count[tid, 3]);
+                            '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                                printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
+                                    @reclaim_throttle_count[tid, 0],
+                                    @reclaim_throttle_count[tid, 1],
+                                    @reclaim_throttle_count[tid, 2],
+                                    @reclaim_throttle_count[tid, 3]);
+                            '`"'
                             printf("        __cond_resched() calls: %d\n", @cond_resched_count[tid]);
                             printf("         shrink_lruvec() calls: %d\n", @shrink_lruvec_count[tid]);
                             printf("           shrink_list() calls: %d\n", @shrink_list_count[tid]);
@@ -205,10 +211,12 @@ else
                     // Aggregated stats without lock
                     @ctxswitch_stats[2] = hist(@ctxswitch_count[tid]);
                     @preempted_stats[2] = hist(@preempted_count[tid]);
-                    @reclaim_throttle_stats[2, 0] = hist(@reclaim_throttle_count[tid, 0]);
-                    @reclaim_throttle_stats[2, 1] = hist(@reclaim_throttle_count[tid, 1]);
-                    @reclaim_throttle_stats[2, 2] = hist(@reclaim_throttle_count[tid, 2]);
-                    @reclaim_throttle_stats[2, 3] = hist(@reclaim_throttle_count[tid, 3]);
+                    '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                        @reclaim_throttle_stats[2, 0] = hist(@reclaim_throttle_count[tid, 0]);
+                        @reclaim_throttle_stats[2, 1] = hist(@reclaim_throttle_count[tid, 1]);
+                        @reclaim_throttle_stats[2, 2] = hist(@reclaim_throttle_count[tid, 2]);
+                        @reclaim_throttle_stats[2, 3] = hist(@reclaim_throttle_count[tid, 3]);
+                    '`"'
                     @cond_resched_stats[2] = hist(@cond_resched_count[tid]);
                     @shrink_lruvec_stats[2] = hist(@shrink_lruvec_count[tid]);
                     @shrink_list_stats[2] = hist(@shrink_list_count[tid]);
@@ -231,10 +239,12 @@ else
                 // Cleanup
                 delete(@ctxswitch_count[tid]);
                 delete(@preempted_count[tid]);
-                delete(@reclaim_throttle_count[tid, 0]);
-                delete(@reclaim_throttle_count[tid, 1]);
-                delete(@reclaim_throttle_count[tid, 2]);
-                delete(@reclaim_throttle_count[tid, 3]);
+                '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                    delete(@reclaim_throttle_count[tid, 0]);
+                    delete(@reclaim_throttle_count[tid, 1]);
+                    delete(@reclaim_throttle_count[tid, 2]);
+                    delete(@reclaim_throttle_count[tid, 3]);
+                '`"'
                 delete(@cond_resched_count[tid]);
                 delete(@shrink_lruvec_count[tid]);
                 delete(@shrink_list_count[tid]);
@@ -260,17 +270,19 @@ else
                 @runtime[tid] += ($now - @exec_start[tid]);
                 @release_start[tid] = $now;
 
-                if ((!args.write && $2 == 0) || (args.write && $3 == 0)) {
+                if ((!args->write && $2 == 0) || (args->write && $3 == 0)) {
                     if ($us > 100000) {
                         // Single long hold stats
-                        printf("%s === [%s] mmap_lock hold stats in TID %d COMM %s ===\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), @type[args.write], tid, comm);
+                        printf("%s === [%s] mmap_lock hold stats in TID %d COMM %s ===\n", strftime("%Y-%m-%d %H:%M:%S", nsecs), @type[args->write], tid, comm);
                         printf("    number of context switches: %d\n", @ctxswitch_count[tid]);
                         printf("         number of preemptions: %d\n", @preempted_count[tid]);
-                        printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
-                            @reclaim_throttle_count[tid, 0],
-                            @reclaim_throttle_count[tid, 1],
-                            @reclaim_throttle_count[tid, 2],
-                            @reclaim_throttle_count[tid, 3]);
+                        '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                            printf("      reclaim_throttle() calls: %d WRITEBACK, %d ISOLATED, %d NOPROGRESS, %d CONGESTED\n",
+                                @reclaim_throttle_count[tid, 0],
+                                @reclaim_throttle_count[tid, 1],
+                                @reclaim_throttle_count[tid, 2],
+                                @reclaim_throttle_count[tid, 3]);
+                        '`"'
                         printf("        __cond_resched() calls: %d\n", @cond_resched_count[tid]);
                         printf("         shrink_lruvec() calls: %d\n", @shrink_lruvec_count[tid]);
                         printf("           shrink_list() calls: %d\n", @shrink_list_count[tid]);
@@ -293,41 +305,47 @@ else
                     }
 
                     // Aggregated hold stats
-                    @hold_us[args.write] = hist($us);
-                    @hold_avg_us[args.write] = avg($us);
-                    @ctxswitch_stats[args.write] = hist(@ctxswitch_count[tid]);
-                    @preempted_stats[args.write] = hist(@preempted_count[tid]);
-                    @reclaim_throttle_stats[args.write, 0] = hist(@reclaim_throttle_count[tid, 0]);
-                    @reclaim_throttle_stats[args.write, 1] = hist(@reclaim_throttle_count[tid, 1]);
-                    @reclaim_throttle_stats[args.write, 2] = hist(@reclaim_throttle_count[tid, 2]);
-                    @reclaim_throttle_stats[args.write, 3] = hist(@reclaim_throttle_count[tid, 3]);
-                    @cond_resched_stats[args.write] = hist(@cond_resched_count[tid]);
-                    @shrink_lruvec_stats[args.write] = hist(@shrink_lruvec_count[tid]);
-                    @shrink_list_stats[args.write] = hist(@shrink_list_count[tid]);
-                    @nr_taken_stats[args.write] = hist(@nr_taken[tid]);
-                    @nr_active_stats[args.write] = hist(@nr_active[tid]);
-                    @nr_deactivated_stats[args.write] = hist(@nr_deactivated[tid]);
-                    @nr_referenced_stats[args.write] = hist(@nr_referenced[tid]);
-                    @nr_scanned_stats[args.write] = hist(@nr_scanned[tid]);
-                    @nr_dirty_stats[args.write] = hist(@nr_dirty[tid]);
-                    @nr_reclaimed_stats[args.write] = hist(@nr_reclaimed[tid]);
-                    @nr_writeback_stats[args.write] = hist(@nr_writeback[tid]);
-                    @nr_congested_stats[args.write] = hist(@nr_congested[tid]);
-                    @nr_immediate_stats[args.write] = hist(@nr_immediate[tid]);
-                    @nr_activate0_stats[args.write] = hist(@nr_activate0[tid]);
-                    @nr_activate1_stats[args.write] = hist(@nr_activate1[tid]);
-                    @nr_ref_keep_stats[args.write] = hist(@nr_ref_keep[tid]);
-                    @nr_unmap_fail_stats[args.write] = hist(@nr_unmap_fail[tid]);
-                    @runtime_us_stats[args.write] = hist(@runtime[tid] / 1000);
+                    @hold_us[args->write] = hist($us);
+                    @hold_avg_us[args->write] = avg($us);
+                    @ctxswitch_stats[args->write] = hist(@ctxswitch_count[tid]);
+                    @preempted_stats[args->write] = hist(@preempted_count[tid]);
+                    '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                        @reclaim_throttle_stats[args->write, 0] = hist(@reclaim_throttle_count[tid, 0]);
+                        @reclaim_throttle_stats[args->write, 1] = hist(@reclaim_throttle_count[tid, 1]);
+                        @reclaim_throttle_stats[args->write, 2] = hist(@reclaim_throttle_count[tid, 2]);
+                        @reclaim_throttle_stats[args->write, 3] = hist(@reclaim_throttle_count[tid, 3]);
+                    '`"'
+                    @cond_resched_stats[args->write] = hist(@cond_resched_count[tid]);
+                    @shrink_lruvec_stats[args->write] = hist(@shrink_lruvec_count[tid]);
+                    @shrink_list_stats[args->write] = hist(@shrink_list_count[tid]);
+                    @nr_taken_stats[args->write] = hist(@nr_taken[tid]);
+                    @nr_active_stats[args->write] = hist(@nr_active[tid]);
+                    @nr_deactivated_stats[args->write] = hist(@nr_deactivated[tid]);
+                    @nr_referenced_stats[args->write] = hist(@nr_referenced[tid]);
+                    @nr_scanned_stats[args->write] = hist(@nr_scanned[tid]);
+                    @nr_dirty_stats[args->write] = hist(@nr_dirty[tid]);
+                    @nr_reclaimed_stats[args->write] = hist(@nr_reclaimed[tid]);
+                    @nr_ref_keep_stats[args->write] = hist(@nr_ref_keep[tid]);
+                    '"`[ $VERIFIER_HAS_BUG -eq 1 ] || echo -E '
+                        @nr_writeback_stats[args->write] = hist(@nr_writeback[tid]);
+                        @nr_congested_stats[args->write] = hist(@nr_congested[tid]);
+                        @nr_immediate_stats[args->write] = hist(@nr_immediate[tid]);
+                        @nr_activate0_stats[args->write] = hist(@nr_activate0[tid]);
+                        @nr_activate1_stats[args->write] = hist(@nr_activate1[tid]);
+                        @nr_unmap_fail_stats[args->write] = hist(@nr_unmap_fail[tid]);
+                        @runtime_us_stats[args->write] = hist(@runtime[tid] / 1000);
+                    '`"'
                 }
 
                 // Cleanup
                 delete(@ctxswitch_count[tid]);
                 delete(@preempted_count[tid]);
-                delete(@reclaim_throttle_count[tid, 0]);
-                delete(@reclaim_throttle_count[tid, 1]);
-                delete(@reclaim_throttle_count[tid, 2]);
-                delete(@reclaim_throttle_count[tid, 3]);
+                '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                    delete(@reclaim_throttle_count[tid, 0]);
+                    delete(@reclaim_throttle_count[tid, 1]);
+                    delete(@reclaim_throttle_count[tid, 2]);
+                    delete(@reclaim_throttle_count[tid, 3]);
+                '`"'
                 delete(@cond_resched_count[tid]);
                 delete(@shrink_lruvec_count[tid]);
                 delete(@shrink_list_count[tid]);
@@ -350,16 +368,16 @@ else
                 delete(@hold_start[tid]);
             }
             tracepoint:sched:sched_switch {
-                if (args.prev_pid > 0 && @hold_start[args.prev_pid] > 0) { // Holder goes off-CPU
-                    if (args.prev_state == TASK_RUNNING) {
-                        @preempted_count[args.prev_pid]++;
+                if (args->prev_pid > 0 && @hold_start[args->prev_pid] > 0) { // Holder goes off-CPU
+                    if (args->prev_state == TASK_RUNNING) {
+                        @preempted_count[args->prev_pid]++;
                     }
-                    @ctxswitch_count[args.prev_pid]++;
-                    @runtime[args.prev_pid] += (nsecs - @exec_start[args.prev_pid]);
-                    //printf("-- PID %d TID %d COMM %s: elapsed %d us PREV_STATE %d\n", pid, tid, comm, (nsecs - @exec_start[args.prev_pid]) / 1000, args.prev_state);
-                } else if (args.next_pid > 0 && @hold_start[args.next_pid] > 0) { // Holder goes on-CPU
-                    //printf("++ PID %d TID %d COMM %s: elapsed %d us\n", pid, tid, comm, (nsecs - @exec_start[args.prev_pid]) / 1000);
-                    @exec_start[args.next_pid] = nsecs;
+                    @ctxswitch_count[args->prev_pid]++;
+                    @runtime[args->prev_pid] += (nsecs - @exec_start[args->prev_pid]);
+                    //printf("-- PID %d TID %d COMM %s: elapsed %d us PREV_STATE %d\n", pid, tid, comm, (nsecs - @exec_start[args->prev_pid]) / 1000, args->prev_state);
+                } else if (args->next_pid > 0 && @hold_start[args->next_pid] > 0) { // Holder goes on-CPU
+                    //printf("++ PID %d TID %d COMM %s: elapsed %d us\n", pid, tid, comm, (nsecs - @exec_start[args->prev_pid]) / 1000);
+                    @exec_start[args->next_pid] = nsecs;
                 }
             }
             kprobe:__cond_resched /pid == $1 && @hold_start[tid] > 0/ {
@@ -372,37 +390,41 @@ else
             }
             tracepoint:vmscan:mm_vmscan_lru_shrink_active /pid == $1/ {
                 @shrink_list_count[tid]++;
-                @nr_taken[tid] += args.nr_taken;
-                @nr_active[tid] += args.nr_active;
-                @nr_deactivated[tid] += args.nr_deactivated;
-                @nr_referenced[tid] += args.nr_referenced;
+                @nr_taken[tid] += args->nr_taken;
+                @nr_active[tid] += args->nr_active;
+                @nr_deactivated[tid] += args->nr_deactivated;
+                @nr_referenced[tid] += args->nr_referenced;
                 //printf(">>A TID %d COMM %s\n", tid, comm);
             }
             tracepoint:vmscan:mm_vmscan_lru_shrink_inactive /pid == $1/ {
                 @shrink_list_count[tid]++;
-                @nr_scanned[tid] += args.nr_scanned;
-                @nr_reclaimed[tid] += args.nr_reclaimed;
-                @nr_dirty[tid] += args.nr_dirty;
-                @nr_writeback[tid] += args.nr_writeback;
-                @nr_congested[tid] += args.nr_congested;
-                @nr_immediate[tid] += args.nr_immediate;
-                @nr_activate0[tid] += args.nr_activate0;
-                @nr_activate1[tid] += args.nr_activate1;
-                @nr_ref_keep[tid] += args.nr_ref_keep;
-                @nr_unmap_fail[tid] += args.nr_unmap_fail;
+                @nr_scanned[tid] += args->nr_scanned;
+                @nr_reclaimed[tid] += args->nr_reclaimed;
+                @nr_dirty[tid] += args->nr_dirty;
+                @nr_writeback[tid] += args->nr_writeback;
+                @nr_congested[tid] += args->nr_congested;
+                @nr_immediate[tid] += args->nr_immediate;
+                @nr_activate0[tid] += args->nr_activate0;
+                @nr_activate1[tid] += args->nr_activate1;
+                @nr_ref_keep[tid] += args->nr_ref_keep;
+                @nr_unmap_fail[tid] += args->nr_unmap_fail;
                 //printf(">>I TID %d COMM %s\n", tid, comm);
             }
+            '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
             kprobe:reclaim_throttle /pid == $1/ {
                 @reclaim_throttle_count[tid, arg1]++;
                 //printf(">>R TID %d COMM %s REASON %d\n", tid, comm, arg1);
             }
+            '`"'
             END {
                 clear(@ctxswitch_count);
                 clear(@preempted_count);
-                clear(@reclaim_throttle_count);
-                clear(@reclaim_throttle_count);
-                clear(@reclaim_throttle_count);
-                clear(@reclaim_throttle_count);
+                '"`[ $NO_RECLAIM_THROTTLE -eq 1 ] || echo -E '
+                    clear(@reclaim_throttle_count);
+                    clear(@reclaim_throttle_count);
+                    clear(@reclaim_throttle_count);
+                    clear(@reclaim_throttle_count);
+                '`"'
                 clear(@cond_resched_count);
                 clear(@shrink_lruvec_count);
                 clear(@shrink_list_count);
